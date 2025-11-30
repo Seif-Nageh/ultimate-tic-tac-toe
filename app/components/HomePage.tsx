@@ -13,7 +13,7 @@ const HomePage: React.FC<HomePageProps> = ({ onStartGame }) => {
   const [showHowToPlay, setShowHowToPlay] = React.useState(false);
 
   return (
-    <div className="w-full h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900 overflow-hidden relative flex items-center justify-center">
+    <div className="w-full min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900 overflow-y-auto relative flex items-center justify-center py-8">
       {/* Animated background pattern */}
       <div className="absolute inset-0 opacity-10">
         <div className="absolute inset-0" style={{

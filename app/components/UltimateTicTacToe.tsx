@@ -419,13 +419,6 @@ const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackT
           >
             −
           </button>
-          <button
-            onClick={() => { setScale(1); setPosition({ x: 0, y: 0 }); }}
-            className="w-12 h-12 bg-white text-black rounded-full shadow-lg flex items-center justify-center font-bold text-xl hover:bg-gray-100 transition active:scale-95"
-            title="Reset View"
-          >
-            ⟲
-          </button>
         </div>
 
         {/* Toggle Button */}
