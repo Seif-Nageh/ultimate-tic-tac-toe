@@ -13,6 +13,7 @@ export interface GameState {
   gameWinner: BoardWinner;
   players: { X: string; O: string };
   rematchRequests?: { X: boolean; O: boolean };
+  playerLeft?: Player | null;  // Tracks which player left (if any)
 }
 
 export interface Room {

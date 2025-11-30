@@ -12,13 +12,14 @@ type AIDifficulty = 'easy' | 'medium' | 'hard';
 interface UltimateTicTacToeProps {
   gameMode: GameMode;
   onBackToHome: () => void;
+  onOpponentLeft?: () => void;
   roomId?: string;
   password?: string;
   initialPlayer?: Player;
   aiDifficulty?: AIDifficulty;
 }
 
-const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackToHome, roomId, initialPlayer, aiDifficulty = 'medium' }) => {
+const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackToHome, onOpponentLeft, roomId, initialPlayer, aiDifficulty = 'medium' }) => {
   // Game state: 9 boards, each with 9 cells
   const [boards, setBoards] = useState<CellValue[][]>(Array(9).fill(null).map(() => Array(9).fill(null)));
   const [boardWinners, setBoardWinners] = useState<BoardWinner[]>(Array(9).fill(null));
@@ -67,6 +68,16 @@ const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackT
           const res = await fetch(`/api/game/${roomId}`);
           const data = await res.json();
           if (data && !data.error) {
+            // Check if opponent left
+            const opponentPlayer = myPlayer === 'X' ? 'O' : 'X';
+            if (data.playerLeft === opponentPlayer) {
+              // Opponent left - trigger callback
+              if (onOpponentLeft) {
+                onOpponentLeft();
+              }
+              return; // Stop polling
+            }
+
             // Only update if server version is newer
             if (data.version !== undefined && data.version > stateVersion) {
               setStateVersion(data.version);
@@ -101,7 +112,7 @@ const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackT
 
       return () => clearTimeout(timeoutId);
     }
-  }, [gameMode, roomId, myPlayer, stateVersion, currentPlayer, gameWinner]);
+  }, [gameMode, roomId, myPlayer, stateVersion, currentPlayer, gameWinner, onOpponentLeft]);
 
   // Legacy sync state (for rematch)
   const syncState = async (newState: object) => {
@@ -914,6 +925,42 @@ const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackT
     }
   }, [isDragging, dragStart]);
 
+  // Notify server when leaving (online mode)
+  const notifyLeave = async () => {
+    if (gameMode === 'multi-online' && roomId) {
+      try {
+        await fetch('/api/room/leave', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomId, player: myPlayer })
+        });
+      } catch (e) {
+        console.error('Failed to notify leave:', e);
+      }
+    }
+  };
+
+  // Handle beforeunload to notify server
+  useEffect(() => {
+    if (gameMode === 'multi-online' && roomId) {
+      const handleBeforeUnload = () => {
+        // Use sendBeacon for reliable delivery on page close
+        navigator.sendBeacon('/api/room/leave', JSON.stringify({ roomId, player: myPlayer }));
+      };
+
+      window.addEventListener('beforeunload', handleBeforeUnload);
+      return () => {
+        window.removeEventListener('beforeunload', handleBeforeUnload);
+      };
+    }
+  }, [gameMode, roomId, myPlayer]);
+
+  // Handle back button with leave notification
+  const handleBackWithLeave = async () => {
+    await notifyLeave();
+    onBackToHome();
+  };
+
   return (
     <div className="w-full h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900 overflow-hidden relative">
       {/* Header */}
@@ -921,7 +968,7 @@ const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackT
         <div className="max-w-7xl mx-auto flex justify-between items-center gap-2">
           <div className="flex items-center gap-2 sm:gap-4 min-w-0">
             <button
-              onClick={onBackToHome}
+              onClick={gameMode === 'multi-online' ? handleBackWithLeave : onBackToHome}
               className="text-white/80 hover:text-white flex items-center transition-colors flex-shrink-0"
               title="Back to Home"
             >

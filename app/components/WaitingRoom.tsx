@@ -8,14 +8,17 @@ interface WaitingRoomProps {
   isHost: boolean;
   onGameStart: () => void;
   onBackToHome: () => void;
+  opponentLeft?: boolean;
+  myPlayer?: 'X' | 'O';
 }
 
-const WaitingRoom: React.FC<WaitingRoomProps> = ({ roomId, password, isHost, onGameStart, onBackToHome }) => {
+const WaitingRoom: React.FC<WaitingRoomProps> = ({ roomId, password, isHost, onGameStart, onBackToHome, opponentLeft, myPlayer }) => {
   const [copied, setCopied] = useState(false);
   const [playerCount, setPlayerCount] = useState(isHost ? 1 : 0);
-  const [hasJoined, setHasJoined] = useState(isHost);
+  const [hasJoined, setHasJoined] = useState(isHost || opponentLeft);
   const [canStartGame, setCanStartGame] = useState(false);
   const [canShare, setCanShare] = useState(false);
+  const [isRejoining, setIsRejoining] = useState(false);
 
   const shareUrl = typeof window !== 'undefined' 
     ? `${window.location.origin}?room=${roomId}${password ? `&pwd=${encodeURIComponent(password)}` : ''}`
@@ -71,6 +74,29 @@ const WaitingRoom: React.FC<WaitingRoomProps> = ({ roomId, password, isHost, onG
       }
     } catch (e) {
       alert('Failed to join room');
+    }
+  };
+
+  const handleRejoin = async () => {
+    if (!myPlayer) return;
+    setIsRejoining(true);
+    try {
+      const res = await fetch('/api/room/rejoin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId, password, player: myPlayer })
+      });
+      const data = await res.json();
+      if (data.success) {
+        // Successfully rejoined, start the game
+        onGameStart();
+      } else {
+        alert(data.error || 'Failed to rejoin');
+      }
+    } catch (e) {
+      alert('Failed to rejoin room');
+    } finally {
+      setIsRejoining(false);
     }
   };
 
@@ -131,11 +157,12 @@ const WaitingRoom: React.FC<WaitingRoomProps> = ({ roomId, password, isHost, onG
         <div className="bg-white/10 backdrop-blur-md rounded-2xl p-6 sm:p-8 border-2 border-white/20">
           <div className="text-center mb-8">
             <h1 className="text-3xl sm:text-4xl font-black text-white mb-2">
-              {isHost ? '🏠 Lobby - Host' : '🎮 Join Game'}
+              {opponentLeft ? '👋 Opponent Left' : isHost ? '🏠 Lobby - Host' : '🎮 Join Game'}
             </h1>
             <p className="text-white/70 text-sm sm:text-base">
-              {!hasJoined && !isHost ? 'Ready to join?' : 
-               playerCount === 2 ? 'Both players ready!' : 
+              {opponentLeft ? 'Your opponent has left the game' :
+               !hasJoined && !isHost ? 'Ready to join?' :
+               playerCount === 2 ? 'Both players ready!' :
                'Waiting for opponent...'}
             </p>
           </div>
@@ -192,8 +219,31 @@ const WaitingRoom: React.FC<WaitingRoomProps> = ({ roomId, password, isHost, onG
 
           {/* Action Buttons */}
           <div className="space-y-3">
-            {/* Share Link (for host) */}
-            {isHost && (
+            {/* Opponent Left - Rejoin Option */}
+            {opponentLeft && (
+              <div className="space-y-4">
+                <div className="bg-yellow-500/20 border border-yellow-500/40 rounded-xl p-4 text-center">
+                  <p className="text-yellow-300 text-sm mb-2">
+                    The game is still saved. You can wait for your opponent to rejoin or continue the game when they return.
+                  </p>
+                </div>
+
+                <button
+                  onClick={handleRejoin}
+                  disabled={isRejoining}
+                  className="w-full py-4 bg-green-600 hover:bg-green-500 disabled:bg-green-800 text-white rounded-xl font-bold text-lg transition-all transform hover:scale-105 active:scale-95 disabled:transform-none"
+                >
+                  {isRejoining ? '⏳ Rejoining...' : '🎮 Rejoin Game'}
+                </button>
+
+                <p className="text-white/60 text-center text-sm">
+                  Share the link again so your opponent can rejoin
+                </p>
+              </div>
+            )}
+
+            {/* Share Link (for host or when opponent left) */}
+            {(isHost || opponentLeft) && (
               <div className="space-y-3">
                 <p className="text-white font-semibold text-center mb-2">
                   📤 Share this link with your friend:
@@ -231,7 +281,7 @@ const WaitingRoom: React.FC<WaitingRoomProps> = ({ roomId, password, isHost, onG
             )}
 
             {/* Join Button (for guest) */}
-            {!isHost && !hasJoined && (
+            {!isHost && !hasJoined && !opponentLeft && (
               <button
                 onClick={handleJoin}
                 className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold text-lg transition-all transform hover:scale-105 active:scale-95"
@@ -252,7 +302,7 @@ const WaitingRoom: React.FC<WaitingRoomProps> = ({ roomId, password, isHost, onG
           </div>
 
           {/* Loading Animation */}
-          {(hasJoined || isHost) && playerCount < 2 && (
+          {(hasJoined || isHost) && playerCount < 2 && !opponentLeft && (
             <div className="mt-6 flex justify-center">
               <div className="flex gap-2">
                 <div className="w-3 h-3 bg-white/60 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>

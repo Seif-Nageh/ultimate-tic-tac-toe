@@ -16,6 +16,7 @@ interface GameState {
   isWaiting?: boolean;
   isHost?: boolean;
   aiDifficulty?: AIDifficulty;
+  opponentLeft?: boolean;  // Track if opponent left during game
 }
 
 export default function Home() {
@@ -116,6 +117,17 @@ export default function Home() {
     }
   };
 
+  const handleOpponentLeft = () => {
+    if (gameState) {
+      // Return to waiting room with opponentLeft flag
+      setGameState({
+        ...gameState,
+        isWaiting: true,
+        opponentLeft: true
+      });
+    }
+  };
+
   if (gameState === null) {
     return <HomePage onStartGame={handleStartGame} />;
   }
@@ -129,6 +141,8 @@ export default function Home() {
         isHost={gameState.isHost || false}
         onGameStart={handleGameStart}
         onBackToHome={handleBackToHome}
+        opponentLeft={gameState.opponentLeft}
+        myPlayer={gameState.player}
       />
     );
   }
@@ -137,6 +151,7 @@ export default function Home() {
     <UltimateTicTacToe
       gameMode={gameState.mode}
       onBackToHome={handleBackToHome}
+      onOpponentLeft={handleOpponentLeft}
       roomId={gameState.roomId}
       password={gameState.password}
       initialPlayer={gameState.player}
