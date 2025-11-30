@@ -15,15 +15,19 @@ const WaitingRoom: React.FC<WaitingRoomProps> = ({ roomId, password, isHost, onG
   const [playerCount, setPlayerCount] = useState(isHost ? 1 : 0);
   const [hasJoined, setHasJoined] = useState(isHost);
   const [canStartGame, setCanStartGame] = useState(false);
+  const [canShare, setCanShare] = useState(false);
 
   const shareUrl = typeof window !== 'undefined' 
     ? `${window.location.origin}?room=${roomId}${password ? `&pwd=${encodeURIComponent(password)}` : ''}`
     : '';
 
-  // Update URL for host
+  // Update URL for host and check if Web Share API is available
   useEffect(() => {
-    if (isHost && typeof window !== 'undefined') {
-      window.history.replaceState({}, '', `?room=${roomId}${password ? `&pwd=${encodeURIComponent(password)}` : ''}`);
+    if (typeof window !== 'undefined') {
+      if (isHost) {
+        window.history.replaceState({}, '', `?room=${roomId}${password ? `&pwd=${encodeURIComponent(password)}` : ''}`);
+      }
+      setCanShare(!!navigator.share);
     }
   }, [isHost, roomId, password]);
 
@@ -34,6 +38,21 @@ const WaitingRoom: React.FC<WaitingRoomProps> = ({ roomId, password, isHost, onG
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
       console.error('Failed to copy:', err);
+    }
+  };
+
+  const shareLink = async () => {
+    try {
+      await navigator.share({
+        title: 'Ultimate Tic-Tac-Toe',
+        text: `Join my Ultimate Tic-Tac-Toe game! Room: ${roomId}${password ? ` (Password: ${password})` : ''}`,
+        url: shareUrl
+      });
+    } catch (err) {
+      // User cancelled or share failed - fall back to copy
+      if ((err as Error).name !== 'AbortError') {
+        copyToClipboard();
+      }
     }
   };
 
@@ -194,6 +213,14 @@ const WaitingRoom: React.FC<WaitingRoomProps> = ({ roomId, password, isHost, onG
                   >
                     {copied ? '✓ Copied!' : 'Copy'}
                   </button>
+                  {canShare && (
+                    <button
+                      onClick={shareLink}
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded font-semibold text-sm transition"
+                    >
+                      Share
+                    </button>
+                  )}
                 </div>
 
                 <div className="text-center text-white/60 text-xs">
