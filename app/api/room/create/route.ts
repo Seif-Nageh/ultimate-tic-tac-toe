@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { db } from '@/app/lib/db';
+import { db, GameState } from '@/app/lib/db';
 import { v4 as uuidv4 } from 'uuid';
 
 export async function POST(request: Request) {
@@ -7,7 +7,7 @@ export async function POST(request: Request) {
         const { password } = await request.json();
         const roomId = uuidv4().slice(0, 6).toUpperCase(); // Short 6-char ID
 
-        const initialState = {
+        const initialState: GameState = {
             boards: Array(9).fill(null).map(() => Array(9).fill(null)),
             boardWinners: Array(9).fill(null),
             currentPlayer: 'X',

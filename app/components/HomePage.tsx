@@ -3,13 +3,15 @@
 import React from 'react';
 
 type GameMode = 'solo' | 'multi-offline' | 'multi-online';
+type AIDifficulty = 'easy' | 'medium' | 'hard';
 
 interface HomePageProps {
-  onStartGame: (mode: GameMode, params?: { roomId?: string; password?: string; player?: 'X' | 'O' }) => void;
+  onStartGame: (mode: GameMode, params?: { roomId?: string; password?: string; player?: 'X' | 'O'; aiDifficulty?: AIDifficulty }) => void;
 }
 
 const HomePage: React.FC<HomePageProps> = ({ onStartGame }) => {
   const [showMultiplayerOptions, setShowMultiplayerOptions] = React.useState(false);
+  const [showSoloOptions, setShowSoloOptions] = React.useState(false);
   const [showHowToPlay, setShowHowToPlay] = React.useState(false);
 
   return (
@@ -37,11 +39,11 @@ const HomePage: React.FC<HomePageProps> = ({ onStartGame }) => {
         </div>
 
         {/* Menu Options */}
-        {!showMultiplayerOptions ? (
+        {!showMultiplayerOptions && !showSoloOptions ? (
           <div className="space-y-3 sm:space-y-4">
             {/* Solo Play Button */}
             <button
-              onClick={() => onStartGame('solo')}
+              onClick={() => setShowSoloOptions(true)}
               className="w-full bg-white/20 backdrop-blur-md hover:bg-white/30 active:bg-white/40 border-2 border-white/40 hover:border-white/60 rounded-2xl p-4 sm:p-8 transition-all duration-300 transform hover:scale-105 active:scale-100 hover:shadow-2xl group"
             >
               <div className="flex items-center justify-between gap-3">
@@ -72,6 +74,76 @@ const HomePage: React.FC<HomePageProps> = ({ onStartGame }) => {
                   </p>
                 </div>
                 <div className="text-4xl sm:text-6xl flex-shrink-0">👥</div>
+              </div>
+            </button>
+          </div>
+        ) : showSoloOptions ? (
+          <div className="space-y-4">
+            {/* Back Button */}
+            <button
+              onClick={() => setShowSoloOptions(false)}
+              className="mb-4 text-white/80 hover:text-white flex items-center gap-2 transition-colors"
+            >
+              <span className="text-2xl">←</span>
+              <span className="text-lg font-semibold">Back</span>
+            </button>
+
+            <div className="text-center mb-6">
+              <h3 className="text-2xl sm:text-3xl font-bold text-white mb-2">Choose Difficulty</h3>
+              <p className="text-white/70 text-sm">Select your challenge level</p>
+            </div>
+
+            {/* Easy */}
+            <button
+              onClick={() => onStartGame('solo', { aiDifficulty: 'easy' })}
+              className="w-full bg-green-500/30 backdrop-blur-md hover:bg-green-500/50 border-2 border-green-400/50 hover:border-green-400 rounded-2xl p-4 sm:p-6 transition-all duration-300 transform hover:scale-105 hover:shadow-2xl group"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-left">
+                  <h3 className="text-xl sm:text-2xl font-bold text-white mb-1 group-hover:text-green-200 transition-colors">
+                    Easy
+                  </h3>
+                  <p className="text-white/70 text-xs sm:text-sm">
+                    Relaxed gameplay, great for learning
+                  </p>
+                </div>
+                <div className="text-3xl sm:text-5xl flex-shrink-0">🌱</div>
+              </div>
+            </button>
+
+            {/* Medium */}
+            <button
+              onClick={() => onStartGame('solo', { aiDifficulty: 'medium' })}
+              className="w-full bg-yellow-500/30 backdrop-blur-md hover:bg-yellow-500/50 border-2 border-yellow-400/50 hover:border-yellow-400 rounded-2xl p-4 sm:p-6 transition-all duration-300 transform hover:scale-105 hover:shadow-2xl group"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-left">
+                  <h3 className="text-xl sm:text-2xl font-bold text-white mb-1 group-hover:text-yellow-200 transition-colors">
+                    Medium
+                  </h3>
+                  <p className="text-white/70 text-xs sm:text-sm">
+                    Balanced challenge, strategic AI
+                  </p>
+                </div>
+                <div className="text-3xl sm:text-5xl flex-shrink-0">⚡</div>
+              </div>
+            </button>
+
+            {/* Hard */}
+            <button
+              onClick={() => onStartGame('solo', { aiDifficulty: 'hard' })}
+              className="w-full bg-red-500/30 backdrop-blur-md hover:bg-red-500/50 border-2 border-red-400/50 hover:border-red-400 rounded-2xl p-4 sm:p-6 transition-all duration-300 transform hover:scale-105 hover:shadow-2xl group"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-left">
+                  <h3 className="text-xl sm:text-2xl font-bold text-white mb-1 group-hover:text-red-200 transition-colors">
+                    Hard
+                  </h3>
+                  <p className="text-white/70 text-xs sm:text-sm">
+                    Expert AI with deep strategy
+                  </p>
+                </div>
+                <div className="text-3xl sm:text-5xl flex-shrink-0">🔥</div>
               </div>
             </button>
           </div>

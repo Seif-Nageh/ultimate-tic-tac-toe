@@ -4,7 +4,8 @@
       "Bash(npm run dev:*)",
       "Bash(taskkill /F /PID 1996 2)",
       "Bash(nul)",
-      "Bash(npm run build:*)"
+      "Bash(npm run build:*)",
+      "Bash(find:*)"
     ],
     "deny": [],
     "ask": []

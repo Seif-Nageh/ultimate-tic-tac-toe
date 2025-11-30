@@ -7,15 +7,18 @@ type CellValue = Player | null;
 type BoardWinner = Player | 'DRAW' | null;
 type GameMode = 'solo' | 'multi-offline' | 'multi-online';
 
+type AIDifficulty = 'easy' | 'medium' | 'hard';
+
 interface UltimateTicTacToeProps {
   gameMode: GameMode;
   onBackToHome: () => void;
   roomId?: string;
   password?: string;
   initialPlayer?: Player;
+  aiDifficulty?: AIDifficulty;
 }
 
-const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackToHome, roomId, initialPlayer }) => {
+const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackToHome, roomId, initialPlayer, aiDifficulty = 'medium' }) => {
   // Game state: 9 boards, each with 9 cells
   const [boards, setBoards] = useState<CellValue[][]>(Array(9).fill(null).map(() => Array(9).fill(null)));
   const [boardWinners, setBoardWinners] = useState<BoardWinner[]>(Array(9).fill(null));
@@ -39,30 +42,48 @@ const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackT
   const [rematchRequests, setRematchRequests] = useState({ X: false, O: false });
   const [showRematchNotification, setShowRematchNotification] = useState(false);
 
-  // Polling for online game state
+  // New: Sync and error handling state
+  const [stateVersion, setStateVersion] = useState(0);
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'error'>('idle');
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const pendingMoveRef = useRef<{ boardIndex: number; cellIndex: number } | null>(null);
+  const retryCountRef = useRef(0);
+  const MAX_RETRIES = 3;
+
+  // Get adaptive polling interval
+  const getPollingInterval = () => {
+    if (gameWinner) return 5000;           // Game over: slow (5s)
+    if (currentPlayer === myPlayer) return 2000;  // My turn: medium (2s)
+    return 500;                            // Their turn: fast (500ms)
+  };
+
+  // Smart polling for online game state
   useEffect(() => {
     if (gameMode === 'multi-online' && roomId) {
-      const interval = setInterval(async () => {
+      let timeoutId: NodeJS.Timeout;
+
+      const poll = async () => {
         try {
           const res = await fetch(`/api/game/${roomId}`);
           const data = await res.json();
           if (data && !data.error) {
-            setBoards(data.boards);
-            setBoardWinners(data.boardWinners);
-            setCurrentPlayer(data.currentPlayer);
-            setActiveBoard(data.activeBoard);
-            setGameWinner(data.gameWinner);
-            
+            // Only update if server version is newer
+            if (data.version !== undefined && data.version > stateVersion) {
+              setStateVersion(data.version);
+              setBoards(data.boards);
+              setBoardWinners(data.boardWinners);
+              setCurrentPlayer(data.currentPlayer);
+              setActiveBoard(data.activeBoard);
+              setGameWinner(data.gameWinner);
+            }
+
             // Check for rematch requests
             if (data.rematchRequests) {
               setRematchRequests(data.rematchRequests);
-              
-              // If both players requested rematch, reset the game
+
               if (data.rematchRequests.X && data.rematchRequests.O) {
-                // Game will be reset by the server, just update local state
                 setShowRematchNotification(false);
               } else if (data.rematchRequests[myPlayer === 'X' ? 'O' : 'X']) {
-                // Opponent requested rematch
                 setShowRematchNotification(true);
               }
             }
@@ -70,14 +91,20 @@ const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackT
         } catch (e) {
           console.error('Polling error:', e);
         }
-      }, 1000); // Poll every 1 second
 
-      return () => clearInterval(interval);
+        // Schedule next poll with adaptive interval
+        timeoutId = setTimeout(poll, getPollingInterval());
+      };
+
+      // Start polling
+      timeoutId = setTimeout(poll, getPollingInterval());
+
+      return () => clearTimeout(timeoutId);
     }
-  }, [gameMode, roomId, myPlayer]);
+  }, [gameMode, roomId, myPlayer, stateVersion, currentPlayer, gameWinner]);
 
-  // Sync state to server
-  const syncState = async (newState: any) => {
+  // Legacy sync state (for rematch)
+  const syncState = async (newState: object) => {
     if (gameMode === 'multi-online' && roomId) {
       try {
         await fetch(`/api/game/${roomId}`, {
@@ -89,6 +116,94 @@ const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackT
         console.error('Sync error:', e);
       }
     }
+  };
+
+  // New: Submit move with validation and retry
+  const submitMove = async (boardIndex: number, cellIndex: number): Promise<boolean> => {
+    if (!roomId) return false;
+
+    setSyncStatus('syncing');
+    setSyncError(null);
+    pendingMoveRef.current = { boardIndex, cellIndex };
+
+    try {
+      const res = await fetch(`/api/game/${roomId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          boardIndex,
+          cellIndex,
+          player: myPlayer,
+          expectedVersion: stateVersion
+        })
+      });
+
+      const data = await res.json();
+
+      if (data.success) {
+        // Update local state with server response
+        setBoards(data.newState.boards);
+        setBoardWinners(data.newState.boardWinners);
+        setCurrentPlayer(data.newState.currentPlayer);
+        setActiveBoard(data.newState.activeBoard);
+        setGameWinner(data.newState.gameWinner);
+        setStateVersion(data.version);
+        setSyncStatus('idle');
+        pendingMoveRef.current = null;
+        retryCountRef.current = 0;
+        return true;
+      } else {
+        // Handle specific errors
+        if (data.error === 'stale_state') {
+          // State changed - fetch latest and notify user
+          setStateVersion(data.currentVersion);
+          if (data.currentState) {
+            setBoards(data.currentState.boards);
+            setBoardWinners(data.currentState.boardWinners);
+            setCurrentPlayer(data.currentState.currentPlayer);
+            setActiveBoard(data.currentState.activeBoard);
+            setGameWinner(data.currentState.gameWinner);
+          }
+          setSyncError('Opponent moved! Try again.');
+          setSyncStatus('error');
+        } else {
+          setSyncError(data.message || 'Move failed');
+          setSyncStatus('error');
+        }
+        pendingMoveRef.current = null;
+        return false;
+      }
+    } catch (e) {
+      console.error('Move error:', e);
+
+      // Auto-retry on network error
+      if (retryCountRef.current < MAX_RETRIES) {
+        retryCountRef.current++;
+        setSyncError(`Retrying... (${retryCountRef.current}/${MAX_RETRIES})`);
+        await new Promise(r => setTimeout(r, 1000));
+        return submitMove(boardIndex, cellIndex);
+      }
+
+      setSyncError('Connection failed. Click to retry.');
+      setSyncStatus('error');
+      return false;
+    }
+  };
+
+  // Manual retry
+  const retryMove = async () => {
+    if (pendingMoveRef.current) {
+      retryCountRef.current = 0;
+      await submitMove(pendingMoveRef.current.boardIndex, pendingMoveRef.current.cellIndex);
+    }
+  };
+
+  // Dismiss error
+  const dismissError = () => {
+    setSyncStatus('idle');
+    setSyncError(null);
+    pendingMoveRef.current = null;
+    retryCountRef.current = 0;
   };
 
   // Check if a small board has a winner
@@ -129,105 +244,420 @@ const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackT
         return winners[a];
       }
     }
-    return null;
-  };
 
-  // AI Logic for Solo Mode
-  const getAIMove = (): { boardIndex: number; cellIndex: number } | null => {
-    const availableBoards = activeBoard !== null
-      ? [activeBoard]
-      : boards.map((_, i) => i).filter(i => !boardWinners[i]);
-
-    // Strategy 1: Try to win a board
-    for (const boardIdx of availableBoards) {
-      const board = boards[boardIdx];
-      const winningMove = findWinningMove(board, 'O');
-      if (winningMove !== null) {
-        return { boardIndex: boardIdx, cellIndex: winningMove };
-      }
-    }
-
-    // Strategy 2: Block opponent from winning a board
-    for (const boardIdx of availableBoards) {
-      const board = boards[boardIdx];
-      const blockingMove = findWinningMove(board, 'X');
-      if (blockingMove !== null) {
-        return { boardIndex: boardIdx, cellIndex: blockingMove };
-      }
-    }
-
-    // Strategy 3: Try to win the overall game
-    const aiWinningBoard = findWinningMove(boardWinners, 'O');
-    if (aiWinningBoard !== null && availableBoards.includes(aiWinningBoard)) {
-      const board = boards[aiWinningBoard];
-      const emptyCells = board.map((cell, idx) => cell === null ? idx : -1).filter(idx => idx !== -1);
-      if (emptyCells.length > 0) {
-        return { boardIndex: aiWinningBoard, cellIndex: emptyCells[0] };
-      }
-    }
-
-    // Strategy 4: Block opponent from winning the overall game
-    const blockGameBoard = findWinningMove(boardWinners, 'X');
-    if (blockGameBoard !== null && availableBoards.includes(blockGameBoard)) {
-      const board = boards[blockGameBoard];
-      const emptyCells = board.map((cell, idx) => cell === null ? idx : -1).filter(idx => idx !== -1);
-      if (emptyCells.length > 0) {
-        return { boardIndex: blockGameBoard, cellIndex: emptyCells[0] };
-      }
-    }
-
-    // Strategy 5: Take center of a board if available
-    for (const boardIdx of availableBoards) {
-      if (boards[boardIdx][4] === null) {
-        return { boardIndex: boardIdx, cellIndex: 4 };
-      }
-    }
-
-    // Strategy 6: Take corners
-    const corners = [0, 2, 6, 8];
-    for (const boardIdx of availableBoards) {
-      const board = boards[boardIdx];
-      for (const corner of corners) {
-        if (board[corner] === null) {
-          return { boardIndex: boardIdx, cellIndex: corner };
+    // Check for overall game draw - all boards decided and no winner possible
+    const allBoardsDecided = winners.every(w => w !== null);
+    if (allBoardsDecided) {
+      // Check if any winning line is still possible
+      for (const line of lines) {
+        const [a, b, c] = line;
+        const lineValues = [winners[a], winners[b], winners[c]];
+        // A line is still winnable if it has at least one player and no opponent
+        const hasX = lineValues.some(v => v === 'X');
+        const hasO = lineValues.some(v => v === 'O');
+        if ((hasX && !hasO) || (hasO && !hasX)) {
+          // This shouldn't happen if all boards are decided, but safety check
+          continue;
         }
       }
+      return 'DRAW';
     }
 
-    // Strategy 7: Take any available cell
-    for (const boardIdx of availableBoards) {
-      const board = boards[boardIdx];
-      const emptyCells = board.map((cell, idx) => cell === null ? idx : -1).filter(idx => idx !== -1);
-      if (emptyCells.length > 0) {
-        return { boardIndex: boardIdx, cellIndex: emptyCells[0] };
-      }
+    // Check if the game is unwinnable (all lines blocked)
+    let xCanWin = false;
+    let oCanWin = false;
+    for (const line of lines) {
+      const [a, b, c] = line;
+      const lineValues = [winners[a], winners[b], winners[c]];
+      const hasX = lineValues.some(v => v === 'X');
+      const hasO = lineValues.some(v => v === 'O');
+      const hasDraw = lineValues.some(v => v === 'DRAW');
+
+      // X can still win this line if no O or DRAW blocking
+      if (!hasO && !hasDraw) xCanWin = true;
+      // O can still win this line if no X or DRAW blocking
+      if (!hasX && !hasDraw) oCanWin = true;
+    }
+
+    // If neither player can win anymore, it's a draw
+    if (!xCanWin && !oCanWin) {
+      return 'DRAW';
     }
 
     return null;
   };
 
-  const findWinningMove = (cells: (CellValue | BoardWinner)[], player: Player): number | null => {
-    const lines = [
-      [0, 1, 2], [3, 4, 5], [6, 7, 8], // rows
-      [0, 3, 6], [1, 4, 7], [2, 5, 8], // columns
-      [0, 4, 8], [2, 4, 6] // diagonals
-    ];
+  // Winning lines constant
+  const LINES = [
+    [0, 1, 2], [3, 4, 5], [6, 7, 8], // rows
+    [0, 3, 6], [1, 4, 7], [2, 5, 8], // columns
+    [0, 4, 8], [2, 4, 6] // diagonals
+  ];
 
-    for (const line of lines) {
+  // Find a winning move for a player in a board
+  const findWinningMove = (cells: (CellValue | BoardWinner)[], player: Player): number | null => {
+    for (const line of LINES) {
       const [a, b, c] = line;
       const values = [cells[a], cells[b], cells[c]];
       const playerCount = values.filter(v => v === player).length;
       const emptyCount = values.filter(v => v === null).length;
 
       if (playerCount === 2 && emptyCount === 1) {
-        // Found a winning/blocking position
         if (cells[a] === null) return a;
         if (cells[b] === null) return b;
         if (cells[c] === null) return c;
       }
     }
-
     return null;
+  };
+
+
+  // Evaluate a small board's strategic value
+  const evaluateBoard = (board: CellValue[], player: Player): number => {
+    const opponent = player === 'X' ? 'O' : 'X';
+    let score = 0;
+
+    // Check if board is won
+    for (const line of LINES) {
+      const [a, b, c] = line;
+      if (board[a] && board[a] === board[b] && board[a] === board[c]) {
+        return board[a] === player ? 100 : -100;
+      }
+    }
+
+    // Evaluate position
+    for (const line of LINES) {
+      const [a, b, c] = line;
+      const values = [board[a], board[b], board[c]];
+      const playerCount = values.filter(v => v === player).length;
+      const opponentCount = values.filter(v => v === opponent).length;
+      const emptyCount = values.filter(v => v === null).length;
+
+      if (playerCount === 2 && emptyCount === 1) score += 10; // Threat
+      if (playerCount === 1 && emptyCount === 2) score += 2;  // Potential
+      if (opponentCount === 2 && emptyCount === 1) score -= 10; // Block needed
+      if (opponentCount === 1 && emptyCount === 2) score -= 2;
+    }
+
+    // Center control bonus
+    if (board[4] === player) score += 4;
+    if (board[4] === opponent) score -= 4;
+
+    // Corner control
+    const corners = [0, 2, 6, 8];
+    for (const corner of corners) {
+      if (board[corner] === player) score += 2;
+      if (board[corner] === opponent) score -= 2;
+    }
+
+    return score;
+  };
+
+  // Evaluate the meta-game (board winners level)
+  const evaluateMetaGame = (winners: BoardWinner[], player: Player): number => {
+    const opponent = player === 'X' ? 'O' : 'X';
+    let score = 0;
+
+    // Check for win
+    for (const line of LINES) {
+      const [a, b, c] = line;
+      if (winners[a] && winners[a] !== 'DRAW' &&
+          winners[a] === winners[b] && winners[a] === winners[c]) {
+        return winners[a] === player ? 10000 : -10000;
+      }
+    }
+
+    // Evaluate meta-game position
+    for (const line of LINES) {
+      const [a, b, c] = line;
+      const values = [winners[a], winners[b], winners[c]];
+      const playerCount = values.filter(v => v === player).length;
+      const opponentCount = values.filter(v => v === opponent).length;
+      const drawCount = values.filter(v => v === 'DRAW').length;
+
+      // Line is still winnable by player
+      if (opponentCount === 0 && drawCount === 0) {
+        if (playerCount === 2) score += 500; // One away from winning
+        if (playerCount === 1) score += 50;
+      }
+      // Line is winnable by opponent
+      if (playerCount === 0 && drawCount === 0) {
+        if (opponentCount === 2) score -= 500;
+        if (opponentCount === 1) score -= 50;
+      }
+    }
+
+    // Center board is strategically valuable
+    if (winners[4] === player) score += 100;
+    if (winners[4] === opponent) score -= 100;
+
+    // Corner boards
+    for (const corner of [0, 2, 6, 8]) {
+      if (winners[corner] === player) score += 30;
+      if (winners[corner] === opponent) score -= 30;
+    }
+
+    return score;
+  };
+
+  // Check where this move would send the opponent
+  const evaluateSendLocation = (
+    cellIndex: number,
+    currentBoards: CellValue[][],
+    currentWinners: BoardWinner[],
+    player: Player
+  ): number => {
+    const opponent = player === 'X' ? 'O' : 'X';
+
+    // If sending to a won/drawn board, opponent can play anywhere - bad!
+    if (currentWinners[cellIndex]) {
+      return -50;
+    }
+
+    const targetBoard = currentBoards[cellIndex];
+
+    // Check if opponent has a winning move there
+    if (findWinningMove(targetBoard, opponent) !== null) {
+      return -30; // Sending them where they can win
+    }
+
+    // Check if we have a winning move there (they'll have to block)
+    if (findWinningMove(targetBoard, player) !== null) {
+      return 20;
+    }
+
+    // Evaluate board control
+    const boardScore = evaluateBoard(targetBoard, player);
+    return boardScore / 10; // Scale down
+  };
+
+  // Get all valid moves
+  const getValidMoves = (
+    currentBoards: CellValue[][],
+    currentWinners: BoardWinner[],
+    currentActiveBoard: number | null
+  ): { boardIndex: number; cellIndex: number }[] => {
+    const moves: { boardIndex: number; cellIndex: number }[] = [];
+    const availableBoards = currentActiveBoard !== null
+      ? [currentActiveBoard].filter(i => !currentWinners[i])
+      : currentBoards.map((_, i) => i).filter(i => !currentWinners[i]);
+
+    for (const boardIdx of availableBoards) {
+      for (let cellIdx = 0; cellIdx < 9; cellIdx++) {
+        if (currentBoards[boardIdx][cellIdx] === null) {
+          moves.push({ boardIndex: boardIdx, cellIndex: cellIdx });
+        }
+      }
+    }
+    return moves;
+  };
+
+  // Simulate a move and return new state
+  const simulateMove = (
+    currentBoards: CellValue[][],
+    currentWinners: BoardWinner[],
+    boardIndex: number,
+    cellIndex: number,
+    player: Player
+  ): { boards: CellValue[][], winners: BoardWinner[], nextActive: number | null } => {
+    const newBoards = currentBoards.map((board, i) =>
+      i === boardIndex ? board.map((cell, j) => j === cellIndex ? player : cell) : [...board]
+    );
+
+    const newWinners = [...currentWinners];
+    const winner = checkBoardWinner(newBoards[boardIndex]);
+    if (winner) {
+      newWinners[boardIndex] = winner;
+    }
+
+    // Determine next active board
+    let nextActive: number | null = null;
+    if (winner) {
+      nextActive = null; // Current rule: winning a board lets opponent play anywhere
+    } else if (newWinners[cellIndex]) {
+      nextActive = null;
+    } else {
+      nextActive = cellIndex;
+    }
+
+    return { boards: newBoards, winners: newWinners, nextActive };
+  };
+
+  // Minimax with alpha-beta pruning
+  const minimax = (
+    currentBoards: CellValue[][],
+    currentWinners: BoardWinner[],
+    currentActiveBoard: number | null,
+    depth: number,
+    alpha: number,
+    beta: number,
+    isMaximizing: boolean,
+    player: Player
+  ): number => {
+    const opponent = player === 'X' ? 'O' : 'X';
+
+    // Check terminal states
+    const gameResult = checkGameWinner(currentWinners);
+    if (gameResult === player) return 10000 - depth;
+    if (gameResult === opponent) return -10000 + depth;
+    if (gameResult === 'DRAW') return 0;
+
+    // Depth limit reached - evaluate position
+    if (depth === 0) {
+      return evaluateMetaGame(currentWinners, player);
+    }
+
+    const moves = getValidMoves(currentBoards, currentWinners, currentActiveBoard);
+    if (moves.length === 0) return 0;
+
+    if (isMaximizing) {
+      let maxEval = -Infinity;
+      for (const move of moves) {
+        const { boards, winners, nextActive } = simulateMove(
+          currentBoards, currentWinners, move.boardIndex, move.cellIndex, player
+        );
+        const evalScore = minimax(boards, winners, nextActive, depth - 1, alpha, beta, false, player);
+        maxEval = Math.max(maxEval, evalScore);
+        alpha = Math.max(alpha, evalScore);
+        if (beta <= alpha) break;
+      }
+      return maxEval;
+    } else {
+      let minEval = Infinity;
+      for (const move of moves) {
+        const { boards, winners, nextActive } = simulateMove(
+          currentBoards, currentWinners, move.boardIndex, move.cellIndex, opponent
+        );
+        const evalScore = minimax(boards, winners, nextActive, depth - 1, alpha, beta, true, player);
+        minEval = Math.min(minEval, evalScore);
+        beta = Math.min(beta, evalScore);
+        if (beta <= alpha) break;
+      }
+      return minEval;
+    }
+  };
+
+  // AI Logic for Solo Mode - Multi-difficulty
+  const getAIMove = (): { boardIndex: number; cellIndex: number } | null => {
+    const moves = getValidMoves(boards, boardWinners, activeBoard);
+    if (moves.length === 0) return null;
+
+    // Easy: Random with slight preference for good moves
+    if (aiDifficulty === 'easy') {
+      // 70% random, 30% smart
+      if (Math.random() < 0.7) {
+        return moves[Math.floor(Math.random() * moves.length)];
+      }
+      // Fall through to simple heuristic
+      for (const move of moves) {
+        if (findWinningMove(boards[move.boardIndex], 'O') === move.cellIndex) {
+          return move;
+        }
+      }
+      for (const move of moves) {
+        if (findWinningMove(boards[move.boardIndex], 'X') === move.cellIndex) {
+          return move;
+        }
+      }
+      return moves[Math.floor(Math.random() * moves.length)];
+    }
+
+    // Medium: Heuristic-based without deep search
+    if (aiDifficulty === 'medium') {
+      let bestMove = moves[0];
+      let bestScore = -Infinity;
+
+      for (const move of moves) {
+        let score = 0;
+
+        // Immediate win on this board
+        if (findWinningMove(boards[move.boardIndex], 'O') === move.cellIndex) {
+          score += 1000;
+          // Check if this wins a critical meta-game position
+          const simulated = simulateMove(boards, boardWinners, move.boardIndex, move.cellIndex, 'O');
+          if (findWinningMove(simulated.winners, 'O') !== null) {
+            score += 5000;
+          }
+        }
+
+        // Block opponent win
+        if (findWinningMove(boards[move.boardIndex], 'X') === move.cellIndex) {
+          score += 500;
+        }
+
+        // Strategic board positions
+        const metaWinMove = findWinningMove(boardWinners, 'O');
+        if (metaWinMove === move.boardIndex) {
+          score += 300;
+        }
+        const metaBlockMove = findWinningMove(boardWinners, 'X');
+        if (metaBlockMove === move.boardIndex) {
+          score += 200;
+        }
+
+        // Board position value
+        score += evaluateBoard(boards[move.boardIndex], 'O') / 10;
+
+        // Center cell preference
+        if (move.cellIndex === 4) score += 15;
+        // Corner preference
+        if ([0, 2, 6, 8].includes(move.cellIndex)) score += 8;
+
+        // Consider where we send the opponent
+        score += evaluateSendLocation(move.cellIndex, boards, boardWinners, 'O');
+
+        // Small randomness to avoid predictability
+        score += Math.random() * 5;
+
+        if (score > bestScore) {
+          bestScore = score;
+          bestMove = move;
+        }
+      }
+
+      return bestMove;
+    }
+
+    // Hard: Minimax with alpha-beta pruning
+    const searchDepth = moves.length > 30 ? 3 : moves.length > 15 ? 4 : 5;
+    let bestMove = moves[0];
+    let bestScore = -Infinity;
+
+    // Sort moves by heuristic for better pruning
+    const scoredMoves = moves.map(move => {
+      let priority = 0;
+      if (findWinningMove(boards[move.boardIndex], 'O') === move.cellIndex) priority += 100;
+      if (findWinningMove(boards[move.boardIndex], 'X') === move.cellIndex) priority += 50;
+      if (move.cellIndex === 4) priority += 10;
+      return { move, priority };
+    }).sort((a, b) => b.priority - a.priority);
+
+    for (const { move } of scoredMoves) {
+      const { boards: newBoards, winners: newWinners, nextActive } = simulateMove(
+        boards, boardWinners, move.boardIndex, move.cellIndex, 'O'
+      );
+
+      // Check immediate win
+      const gameResult = checkGameWinner(newWinners);
+      if (gameResult === 'O') {
+        return move;
+      }
+
+      const score = minimax(
+        newBoards, newWinners, nextActive,
+        searchDepth, -Infinity, Infinity, false, 'O'
+      );
+
+      // Add small evaluation for send location
+      const adjustedScore = score + evaluateSendLocation(move.cellIndex, boards, boardWinners, 'O') * 0.1;
+
+      if (adjustedScore > bestScore) {
+        bestScore = adjustedScore;
+        bestMove = move;
+      }
+    }
+
+    return bestMove;
   };
 
   // Trigger AI move when it's O's turn in solo mode
@@ -246,7 +676,7 @@ const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackT
   }, [currentPlayer, gameMode, gameWinner, boards, boardWinners, activeBoard]);
 
   // Handle cell click
-  const handleCellClick = (boardIndex: number, cellIndex: number) => {
+  const handleCellClick = async (boardIndex: number, cellIndex: number) => {
     if (gameWinner) return;
     if (boardWinners[boardIndex]) return; // Board already won
     if (boards[boardIndex][cellIndex]) return; // Cell already taken
@@ -255,15 +685,22 @@ const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackT
     // In solo mode, prevent player from moving when it's AI's turn (but allow AI moves)
     if (gameMode === 'solo' && currentPlayer === 'O' && !isAIMoveRef.current) return;
 
-    // In online mode, prevent moving if it's not my turn
-    if (gameMode === 'multi-online' && currentPlayer !== myPlayer) return;
+    // In online mode, prevent moving if it's not my turn or syncing
+    if (gameMode === 'multi-online') {
+      if (currentPlayer !== myPlayer) return;
+      if (syncStatus === 'syncing') return; // Prevent double moves
+
+      // Use validated move API
+      await submitMove(boardIndex, cellIndex);
+      return;
+    }
 
     // Reset AI move flag after using it
     if (isAIMoveRef.current) {
       isAIMoveRef.current = false;
     }
 
-    // Make move
+    // Make move locally (for solo/local multiplayer)
     const newBoards = boards.map((board, i) =>
       i === boardIndex ? board.map((cell, j) => j === cellIndex ? currentPlayer : cell) : board
     );
@@ -279,9 +716,9 @@ const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackT
       setBoardWinners(newBoardWinners);
 
       // Check if game is won
-      const gameWinner = checkGameWinner(newBoardWinners);
-      if (gameWinner) {
-        setGameWinner(gameWinner);
+      const gameWinnerResult = checkGameWinner(newBoardWinners);
+      if (gameWinnerResult) {
+        setGameWinner(gameWinnerResult);
       }
 
       // NEW RULE: If current player wins a board, opponent can play anywhere
@@ -295,24 +732,12 @@ const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackT
         nextActiveBoard = nextBoard;
       }
     }
-    
+
     setActiveBoard(nextActiveBoard);
 
     // Switch player
     const nextPlayer = currentPlayer === 'X' ? 'O' : 'X';
     setCurrentPlayer(nextPlayer);
-
-    // Sync with server if online
-    if (gameMode === 'multi-online') {
-      syncState({
-        boards: newBoards,
-        boardWinners: newBoardWinners,
-        currentPlayer: nextPlayer,
-        activeBoard: nextActiveBoard,
-        gameWinner: winner ? checkGameWinner(newBoardWinners) : null,
-        players: { X: 'connected', O: 'connected' } // Keep players connected
-      });
-    }
   };
 
   // Reset game / Request rematch
@@ -342,7 +767,7 @@ const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackT
           };
           
           await syncState(initialState);
-          
+
           // Update local state
           setBoards(initialState.boards);
           setBoardWinners(initialState.boardWinners);
@@ -351,6 +776,7 @@ const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackT
           setGameWinner(null);
           setRematchRequests({ X: false, O: false });
           setShowRematchNotification(false);
+          setStateVersion(0); // Reset version for new game
         } else {
           // Just send my rematch request
           await syncState({
@@ -600,6 +1026,38 @@ const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackT
                 🔄 Opponent wants a rematch! Click "Request Rematch" to accept.
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sync Status Indicator (Online Mode) */}
+      {gameMode === 'multi-online' && (syncStatus === 'syncing' || syncStatus === 'error') && (
+        <div className="absolute top-32 sm:top-40 left-0 right-0 z-30 pointer-events-none">
+          <div className="max-w-7xl mx-auto px-2 sm:px-4">
+            {syncStatus === 'syncing' ? (
+              <div className="bg-yellow-500/90 backdrop-blur-md rounded-lg px-4 py-2 inline-flex items-center gap-2 pointer-events-auto">
+                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                <span className="text-sm font-medium text-white">Syncing move...</span>
+              </div>
+            ) : syncStatus === 'error' && syncError && (
+              <div className="bg-red-500/90 backdrop-blur-md rounded-lg px-4 py-2 inline-flex items-center gap-3 pointer-events-auto">
+                <span className="text-sm font-medium text-white">{syncError}</span>
+                {pendingMoveRef.current && (
+                  <button
+                    onClick={retryMove}
+                    className="bg-white/20 hover:bg-white/30 px-3 py-1 rounded text-sm font-semibold text-white transition"
+                  >
+                    Retry
+                  </button>
+                )}
+                <button
+                  onClick={dismissError}
+                  className="text-white/70 hover:text-white text-lg leading-none transition"
+                >
+                  ×
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

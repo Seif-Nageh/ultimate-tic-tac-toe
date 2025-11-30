@@ -6,6 +6,7 @@ import UltimateTicTacToe from "./components/UltimateTicTacToe";
 import WaitingRoom from "./components/WaitingRoom";
 
 type GameMode = 'solo' | 'multi-offline' | 'multi-online';
+type AIDifficulty = 'easy' | 'medium' | 'hard';
 
 interface GameState {
   mode: GameMode;
@@ -14,6 +15,7 @@ interface GameState {
   player?: 'X' | 'O';
   isWaiting?: boolean;
   isHost?: boolean;
+  aiDifficulty?: AIDifficulty;
 }
 
 export default function Home() {
@@ -34,6 +36,7 @@ export default function Home() {
   }, []);
 
   const handleJoinFromUrl = async (roomId: string, password: string) => {
+    // First try to join an existing room
     try {
       const res = await fetch('/api/room/join', {
         method: 'POST',
@@ -41,29 +44,56 @@ export default function Home() {
         body: JSON.stringify({ roomId, password })
       });
       const data = await res.json();
-      if (data.success) {
-        setGameState({ 
-          mode: 'multi-online', 
-          roomId, 
-          password, 
+      if (res.ok && data.success) {
+        // Successfully joined as the second player (O)
+        setGameState({
+          mode: 'multi-online',
+          roomId,
+          password,
           player: 'O',
           isWaiting: true,
           isHost: false
         });
-      } else {
-        alert(data.error || 'Failed to join room');
+        return;
       }
     } catch (e) {
-      alert('Failed to join room');
+      // ignore errors and fall back to creating a new room
+    }
+
+    // If joining failed (room not found or other error), create a new room and become host
+    try {
+      const createRes = await fetch('/api/room/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password })
+      });
+      const createData = await createRes.json();
+      if (createRes.ok && createData.roomId) {
+        // Update URL to reflect the newly created room
+        const newUrl = `${window.location.origin}?room=${createData.roomId}${password ? `&pwd=${encodeURIComponent(password)}` : ''}`;
+        window.history.replaceState({}, '', newUrl);
+        setGameState({
+          mode: 'multi-online',
+          roomId: createData.roomId,
+          password,
+          player: 'X',
+          isWaiting: true,
+          isHost: true
+        });
+      } else {
+        alert('Failed to create room');
+      }
+    } catch (e) {
+      alert('Failed to create room');
     }
   };
 
-  const handleStartGame = (mode: GameMode, params?: { roomId?: string; password?: string; player?: 'X' | 'O' }) => {
+  const handleStartGame = (mode: GameMode, params?: { roomId?: string; password?: string; player?: 'X' | 'O'; aiDifficulty?: AIDifficulty }) => {
     if (mode === 'multi-online' && params?.roomId) {
       // Start in waiting room for online games
-      setGameState({ 
-        mode, 
-        ...params, 
+      setGameState({
+        mode,
+        ...params,
         isWaiting: true,
         isHost: params.player === 'X'
       });
@@ -104,12 +134,13 @@ export default function Home() {
   }
 
   return (
-    <UltimateTicTacToe 
-      gameMode={gameState.mode} 
+    <UltimateTicTacToe
+      gameMode={gameState.mode}
       onBackToHome={handleBackToHome}
       roomId={gameState.roomId}
       password={gameState.password}
       initialPlayer={gameState.player}
+      aiDifficulty={gameState.aiDifficulty}
     />
   );
 }
