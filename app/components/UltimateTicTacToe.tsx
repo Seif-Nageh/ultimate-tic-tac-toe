@@ -10,15 +10,19 @@ type GameMode = 'solo' | 'multi-offline' | 'multi-online';
 interface UltimateTicTacToeProps {
   gameMode: GameMode;
   onBackToHome: () => void;
+  roomId?: string;
+  password?: string;
+  initialPlayer?: Player;
 }
 
-const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackToHome }) => {
+const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackToHome, roomId, initialPlayer }) => {
   // Game state: 9 boards, each with 9 cells
   const [boards, setBoards] = useState<CellValue[][]>(Array(9).fill(null).map(() => Array(9).fill(null)));
   const [boardWinners, setBoardWinners] = useState<BoardWinner[]>(Array(9).fill(null));
   const [currentPlayer, setCurrentPlayer] = useState<Player>('X');
   const [activeBoard, setActiveBoard] = useState<number | null>(null); // null means any board
   const [gameWinner, setGameWinner] = useState<BoardWinner>(null);
+  const [myPlayer] = useState<Player>(initialPlayer || 'X'); // For online mode
 
   // Zoom state
   const [scale, setScale] = useState(1);
@@ -30,6 +34,44 @@ const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackT
   const [showInstructions, setShowInstructions] = useState(false);
   const [showZoomControls, setShowZoomControls] = useState(false);
   const isAIMoveRef = useRef(false);
+
+  // Polling for online game state
+  useEffect(() => {
+    if (gameMode === 'multi-online' && roomId) {
+      const interval = setInterval(async () => {
+        try {
+          const res = await fetch(`/api/game/${roomId}`);
+          const data = await res.json();
+          if (data && !data.error) {
+            setBoards(data.boards);
+            setBoardWinners(data.boardWinners);
+            setCurrentPlayer(data.currentPlayer);
+            setActiveBoard(data.activeBoard);
+            setGameWinner(data.gameWinner);
+          }
+        } catch (e) {
+          console.error('Polling error:', e);
+        }
+      }, 1000); // Poll every 1 second
+
+      return () => clearInterval(interval);
+    }
+  }, [gameMode, roomId]);
+
+  // Sync state to server
+  const syncState = async (newState: any) => {
+    if (gameMode === 'multi-online' && roomId) {
+      try {
+        await fetch(`/api/game/${roomId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(newState)
+        });
+      } catch (e) {
+        console.error('Sync error:', e);
+      }
+    }
+  };
 
   // Check if a small board has a winner
   const checkBoardWinner = (board: CellValue[]): BoardWinner => {
@@ -195,6 +237,9 @@ const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackT
     // In solo mode, prevent player from moving when it's AI's turn (but allow AI moves)
     if (gameMode === 'solo' && currentPlayer === 'O' && !isAIMoveRef.current) return;
 
+    // In online mode, prevent moving if it's not my turn
+    if (gameMode === 'multi-online' && currentPlayer !== myPlayer) return;
+
     // Reset AI move flag after using it
     if (isAIMoveRef.current) {
       isAIMoveRef.current = false;
@@ -209,6 +254,8 @@ const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackT
     // Check if this move won the small board
     const newBoardWinners = [...boardWinners];
     const winner = checkBoardWinner(newBoards[boardIndex]);
+    let nextActiveBoard: number | null = null;
+
     if (winner) {
       newBoardWinners[boardIndex] = winner;
       setBoardWinners(newBoardWinners);
@@ -220,30 +267,60 @@ const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackT
       }
 
       // NEW RULE: If current player wins a board, opponent can play anywhere
-      setActiveBoard(null);
+      nextActiveBoard = null;
     } else {
       // Determine next active board based on cell position
       const nextBoard = cellIndex;
       if (newBoardWinners[nextBoard]) {
-        setActiveBoard(null); // Next player can play anywhere if sent to won board
+        nextActiveBoard = null; // Next player can play anywhere if sent to won board
       } else {
-        setActiveBoard(nextBoard);
+        nextActiveBoard = nextBoard;
       }
     }
+    
+    setActiveBoard(nextActiveBoard);
 
     // Switch player
-    setCurrentPlayer(currentPlayer === 'X' ? 'O' : 'X');
+    const nextPlayer = currentPlayer === 'X' ? 'O' : 'X';
+    setCurrentPlayer(nextPlayer);
+
+    // Sync with server if online
+    if (gameMode === 'multi-online') {
+      syncState({
+        boards: newBoards,
+        boardWinners: newBoardWinners,
+        currentPlayer: nextPlayer,
+        activeBoard: nextActiveBoard,
+        gameWinner: winner ? checkGameWinner(newBoardWinners) : null,
+        players: { X: 'connected', O: 'connected' } // Keep players connected
+      });
+    }
   };
 
   // Reset game
   const resetGame = () => {
-    setBoards(Array(9).fill(null).map(() => Array(9).fill(null)));
-    setBoardWinners(Array(9).fill(null));
+    const initialState = {
+      boards: Array(9).fill(null).map(() => Array(9).fill(null)),
+      boardWinners: Array(9).fill(null),
+      currentPlayer: 'X',
+      activeBoard: null,
+      gameWinner: null,
+    };
+
+    setBoards(initialState.boards);
+    setBoardWinners(initialState.boardWinners);
     setCurrentPlayer('X');
     setActiveBoard(null);
     setGameWinner(null);
     setScale(1);
     setPosition({ x: 0, y: 0 });
+
+    if (gameMode === 'multi-online') {
+      syncState({
+        ...initialState,
+        players: { X: 'connected', O: 'connected' }
+      });
+    }
   };
 
   // Zoom handlers
@@ -463,12 +540,17 @@ const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackT
               {boards.map((board, boardIndex) => {
                 const isActive = activeBoard === null || activeBoard === boardIndex;
                 const winner = boardWinners[boardIndex];
+                
+                // In online mode, only highlight if it's my turn
+                const shouldHighlight = gameMode === 'multi-online' 
+                  ? (isActive && !winner && currentPlayer === myPlayer)
+                  : (isActive && !winner);
 
                 return (
                   <div
                     key={boardIndex}
                     className={`relative bg-white/20 rounded-lg p-0.5 sm:p-1 transition-all ${
-                      isActive && !winner ? 'ring-1 sm:ring-2 ring-yellow-400 shadow-lg shadow-yellow-400/50' : ''
+                      shouldHighlight ? 'ring-1 sm:ring-2 ring-yellow-400 shadow-lg shadow-yellow-400/50' : ''
                     } ${!isActive && !winner ? 'opacity-50' : ''}`}
                   >
                     {/* Small Board Winner Overlay */}

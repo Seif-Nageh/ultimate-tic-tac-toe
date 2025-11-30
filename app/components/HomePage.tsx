@@ -5,7 +5,7 @@ import React from 'react';
 type GameMode = 'solo' | 'multi-offline' | 'multi-online';
 
 interface HomePageProps {
-  onStartGame: (mode: GameMode) => void;
+  onStartGame: (mode: GameMode, params?: { roomId?: string; password?: string; player?: 'X' | 'O' }) => void;
 }
 
 const HomePage: React.FC<HomePageProps> = ({ onStartGame }) => {
@@ -104,28 +104,101 @@ const HomePage: React.FC<HomePageProps> = ({ onStartGame }) => {
               </div>
             </button>
 
-            {/* Online Multiplayer - Coming Soon */}
-            <div className="w-full bg-white/10 backdrop-blur-md border-2 border-white/20 rounded-2xl p-8 relative overflow-hidden">
-              {/* Coming Soon Badge */}
-              <div className="absolute top-4 right-4 bg-yellow-400/90 text-purple-900 px-4 py-1 rounded-full text-sm font-bold">
-                Coming Soon
-              </div>
-
-              <div className="flex items-center justify-between opacity-60">
+            {/* Online Multiplayer */}
+            <div className="w-full bg-white/10 backdrop-blur-md border-2 border-white/20 rounded-2xl p-6 relative overflow-hidden">
+              <div className="flex items-center justify-between mb-4">
                 <div className="text-left">
-                  <h3 className="text-3xl font-bold text-white mb-2">
+                  <h3 className="text-2xl font-bold text-white mb-1">
                     Online Game
                   </h3>
                   <p className="text-white/70 text-sm">
-                    Play with friends anywhere in the world
+                    Play with friends remotely
                   </p>
                 </div>
-                <div className="text-6xl">🌐</div>
+                <div className="text-4xl">🌐</div>
               </div>
 
-              {/* Lock Icon Overlay */}
-              <div className="absolute inset-0 flex items-center justify-center bg-black/20 backdrop-blur-[2px]">
-                <div className="text-7xl opacity-50">🔒</div>
+              <div className="space-y-3">
+                {/* Create Room */}
+                <div className="bg-black/20 rounded-xl p-3">
+                  <h4 className="text-white font-semibold mb-2 text-sm">Create Room</h4>
+                  <div className="flex gap-2">
+                    <input 
+                      type="password" 
+                      placeholder="Optional Password" 
+                      className="flex-1 bg-white/10 border border-white/20 rounded px-3 py-1.5 text-white text-sm focus:outline-none focus:border-white/50"
+                      id="create-password"
+                    />
+                    <button 
+                      onClick={async () => {
+                        const password = (document.getElementById('create-password') as HTMLInputElement).value;
+                        try {
+                          const res = await fetch('/api/room/create', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ password })
+                          });
+                          const data = await res.json();
+                          if (data.roomId) {
+                            onStartGame('multi-online', { roomId: data.roomId, password, player: 'X' });
+                          }
+                        } catch (e) {
+                          alert('Failed to create room');
+                        }
+                      }}
+                      className="bg-purple-600 hover:bg-purple-500 text-white px-4 py-1.5 rounded text-sm font-bold transition"
+                    >
+                      Create
+                    </button>
+                  </div>
+                </div>
+
+                {/* Join Room */}
+                <div className="bg-black/20 rounded-xl p-3">
+                  <h4 className="text-white font-semibold mb-2 text-sm">Join Room</h4>
+                  <div className="flex flex-col gap-2">
+                    <input 
+                      type="text" 
+                      placeholder="Room ID" 
+                      className="w-full bg-white/10 border border-white/20 rounded px-3 py-1.5 text-white text-sm focus:outline-none focus:border-white/50 uppercase"
+                      id="join-room-id"
+                    />
+                    <div className="flex gap-2">
+                      <input 
+                        type="password" 
+                        placeholder="Password (if any)" 
+                        className="flex-1 bg-white/10 border border-white/20 rounded px-3 py-1.5 text-white text-sm focus:outline-none focus:border-white/50"
+                        id="join-password"
+                      />
+                      <button 
+                        onClick={async () => {
+                          const roomId = (document.getElementById('join-room-id') as HTMLInputElement).value.toUpperCase();
+                          const password = (document.getElementById('join-password') as HTMLInputElement).value;
+                          if (!roomId) return alert('Please enter a Room ID');
+                          
+                          try {
+                            const res = await fetch('/api/room/join', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ roomId, password })
+                            });
+                            const data = await res.json();
+                            if (data.success) {
+                              onStartGame('multi-online', { roomId, password, player: 'O' });
+                            } else {
+                              alert(data.error || 'Failed to join');
+                            }
+                          } catch (e) {
+                            alert('Failed to join room');
+                          }
+                        }}
+                        className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-1.5 rounded text-sm font-bold transition"
+                      >
+                        Join
+                      </button>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
