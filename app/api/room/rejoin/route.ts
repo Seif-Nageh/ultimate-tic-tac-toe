@@ -9,7 +9,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Missing roomId or player' }, { status: 400 });
     }
 
-    const room = db.getRoom(roomId);
+    const room = await db.getRoom(roomId);
     if (!room) {
       return NextResponse.json({ success: false, error: 'Room not found' }, { status: 404 });
     }
@@ -29,7 +29,7 @@ export async function POST(request: Request) {
       playerLeft: null
     };
 
-    db.updateRoom(roomId, newGameState);
+    await db.updateRoom(roomId, newGameState);
 
     return NextResponse.json({
       success: true,

@@ -1,5 +1,5 @@
-// In-memory store for game rooms
-// In production, replace this with a real database (PostgreSQL, MongoDB, etc.)
+// Database layer using Supabase for persistent storage
+import { supabase } from './supabase';
 
 type Player = 'X' | 'O';
 type CellValue = Player | null;
@@ -13,76 +13,122 @@ export interface GameState {
   gameWinner: BoardWinner;
   players: { X: string; O: string };
   rematchRequests?: { X: boolean; O: boolean };
-  playerLeft?: Player | null;  // Tracks which player left (if any)
+  playerLeft?: Player | null;
 }
 
 export interface Room {
   id: string;
   password: string;
   gameState: GameState;
-  version: number;  // Increments on each move - prevents race conditions
+  version: number;
   lastUpdated: number;
 }
 
-// Use globalThis to persist across hot reloads in Next.js dev mode
-const globalForDb = globalThis as unknown as { rooms: Map<string, Room> | undefined };
+// Database row type from Supabase
+interface RoomRow {
+  id: string;
+  password: string;
+  game_state: GameState;
+  version: number;
+  last_updated: string;
+}
 
-const rooms = globalForDb.rooms ?? new Map<string, Room>();
-
-// Persist to globalThis
-if (process.env.NODE_ENV !== 'production') {
-  globalForDb.rooms = rooms;
+function rowToRoom(row: RoomRow): Room {
+  return {
+    id: row.id,
+    password: row.password,
+    gameState: row.game_state,
+    version: row.version,
+    lastUpdated: new Date(row.last_updated).getTime()
+  };
 }
 
 export const db = {
-  createRoom: (id: string, password: string, gameState: GameState) => {
-    rooms.set(id, {
-      id,
-      password,
-      gameState,
-      version: 0,
-      lastUpdated: Date.now()
-    });
-  },
+  createRoom: async (id: string, password: string, gameState: GameState): Promise<boolean> => {
+    const { error } = await supabase
+      .from('rooms')
+      .insert({
+        id,
+        password,
+        game_state: gameState,
+        version: 0,
+        last_updated: new Date().toISOString()
+      });
 
-  getRoom: (id: string): Room | undefined => {
-    return rooms.get(id);
-  },
-
-  updateRoom: (id: string, gameState: GameState) => {
-    const room = rooms.get(id);
-    if (room) {
-      room.gameState = gameState;
-      room.lastUpdated = Date.now();
+    if (error) {
+      console.error('Create room error:', error);
+      return false;
     }
+    return true;
   },
 
-  // New: Update room with version increment (for moves)
-  updateRoomWithVersion: (id: string, gameState: GameState): number | null => {
-    const room = rooms.get(id);
-    if (room) {
-      room.gameState = gameState;
-      room.version += 1;
-      room.lastUpdated = Date.now();
-      return room.version;
+  getRoom: async (id: string): Promise<Room | null> => {
+    const { data, error } = await supabase
+      .from('rooms')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (error || !data) {
+      return null;
     }
-    return null;
+    return rowToRoom(data as RoomRow);
   },
 
-  deleteRoom: (id: string) => {
-    rooms.delete(id);
+  updateRoom: async (id: string, gameState: GameState): Promise<boolean> => {
+    const { error } = await supabase
+      .from('rooms')
+      .update({
+        game_state: gameState,
+        last_updated: new Date().toISOString()
+      })
+      .eq('id', id);
+
+    if (error) {
+      console.error('Update room error:', error);
+      return false;
+    }
+    return true;
+  },
+
+  updateRoomWithVersion: async (id: string, gameState: GameState): Promise<number | null> => {
+    // First get current version
+    const { data: currentRoom } = await supabase
+      .from('rooms')
+      .select('version')
+      .eq('id', id)
+      .single();
+
+    if (!currentRoom) return null;
+
+    const newVersion = currentRoom.version + 1;
+
+    const { error } = await supabase
+      .from('rooms')
+      .update({
+        game_state: gameState,
+        version: newVersion,
+        last_updated: new Date().toISOString()
+      })
+      .eq('id', id);
+
+    if (error) {
+      console.error('Update room with version error:', error);
+      return null;
+    }
+    return newVersion;
+  },
+
+  deleteRoom: async (id: string): Promise<boolean> => {
+    const { error } = await supabase
+      .from('rooms')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      console.error('Delete room error:', error);
+      return false;
+    }
+    return true;
   }
 };
-
-// Clean up old rooms (older than 24 hours)
-setInterval(() => {
-  const now = Date.now();
-  const maxAge = 24 * 60 * 60 * 1000; // 24 hours
-
-  for (const [id, room] of rooms.entries()) {
-    if (now - room.lastUpdated > maxAge) {
-      rooms.delete(id);
-    }
-  }
-}, 60 * 60 * 1000); // Run every hour
-

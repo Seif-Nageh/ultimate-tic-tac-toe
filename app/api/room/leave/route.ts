@@ -3,15 +3,35 @@ import { db } from '@/app/lib/db';
 
 export async function POST(request: Request) {
   try {
-    const { roomId, player } = await request.json();
+    // Handle both JSON and text/plain (from sendBeacon)
+    const contentType = request.headers.get('content-type') || '';
+    let roomId: string | undefined;
+    let player: string | undefined;
+
+    if (contentType.includes('application/json')) {
+      const body = await request.json();
+      roomId = body.roomId;
+      player = body.player;
+    } else {
+      // sendBeacon sends as text/plain
+      const text = await request.text();
+      try {
+        const body = JSON.parse(text);
+        roomId = body.roomId;
+        player = body.player;
+      } catch {
+        return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
+      }
+    }
 
     if (!roomId || !player) {
       return NextResponse.json({ error: 'Missing roomId or player' }, { status: 400 });
     }
 
-    const room = db.getRoom(roomId);
+    const room = await db.getRoom(roomId);
     if (!room) {
-      return NextResponse.json({ error: 'Room not found' }, { status: 404 });
+      // Room might have been cleaned up - that's okay for leave
+      return NextResponse.json({ success: true, message: 'Room already gone' });
     }
 
     // Mark the player as disconnected
@@ -24,10 +44,11 @@ export async function POST(request: Request) {
       playerLeft: player as 'X' | 'O'
     };
 
-    db.updateRoom(roomId, newGameState);
+    await db.updateRoom(roomId, newGameState);
 
     return NextResponse.json({ success: true });
   } catch (error) {
+    console.error('Leave room error:', error);
     return NextResponse.json({ error: 'Failed to leave room' }, { status: 500 });
   }
 }

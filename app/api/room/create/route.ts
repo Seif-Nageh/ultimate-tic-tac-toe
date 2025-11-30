@@ -23,7 +23,11 @@ export async function POST(request: Request) {
             }
         };
 
-        db.createRoom(roomId, password || '', initialState);
+        const success = await db.createRoom(roomId, password || '', initialState);
+
+        if (!success) {
+            return NextResponse.json({ error: 'Failed to create room' }, { status: 500 });
+        }
 
         return NextResponse.json({ roomId });
     } catch (error) {

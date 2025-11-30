@@ -5,7 +5,7 @@ export async function POST(request: Request) {
     try {
         const { roomId, password } = await request.json();
 
-        const room = db.getRoom(roomId);
+        const room = await db.getRoom(roomId);
 
         if (!room) {
             return NextResponse.json({ error: 'Room not found' }, { status: 404 });
@@ -23,7 +23,7 @@ export async function POST(request: Request) {
             // In a real app we'd use sessions/tokens
         } else {
             gameState.players.O = 'connected';
-            db.updateRoom(roomId, gameState);
+            await db.updateRoom(roomId, gameState);
         }
 
         return NextResponse.json({ success: true });
