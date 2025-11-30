@@ -34,6 +34,10 @@ const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackT
   const [showInstructions, setShowInstructions] = useState(false);
   const [showZoomControls, setShowZoomControls] = useState(false);
   const isAIMoveRef = useRef(false);
+  
+  // Rematch state for online mode
+  const [rematchRequests, setRematchRequests] = useState({ X: false, O: false });
+  const [showRematchNotification, setShowRematchNotification] = useState(false);
 
   // Polling for online game state
   useEffect(() => {
@@ -48,6 +52,20 @@ const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackT
             setCurrentPlayer(data.currentPlayer);
             setActiveBoard(data.activeBoard);
             setGameWinner(data.gameWinner);
+            
+            // Check for rematch requests
+            if (data.rematchRequests) {
+              setRematchRequests(data.rematchRequests);
+              
+              // If both players requested rematch, reset the game
+              if (data.rematchRequests.X && data.rematchRequests.O) {
+                // Game will be reset by the server, just update local state
+                setShowRematchNotification(false);
+              } else if (data.rematchRequests[myPlayer === 'X' ? 'O' : 'X']) {
+                // Opponent requested rematch
+                setShowRematchNotification(true);
+              }
+            }
           }
         } catch (e) {
           console.error('Polling error:', e);
@@ -56,7 +74,7 @@ const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackT
 
       return () => clearInterval(interval);
     }
-  }, [gameMode, roomId]);
+  }, [gameMode, roomId, myPlayer]);
 
   // Sync state to server
   const syncState = async (newState: any) => {
@@ -297,29 +315,91 @@ const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackT
     }
   };
 
-  // Reset game
-  const resetGame = () => {
-    const initialState = {
-      boards: Array(9).fill(null).map(() => Array(9).fill(null)),
-      boardWinners: Array(9).fill(null),
-      currentPlayer: 'X',
-      activeBoard: null,
-      gameWinner: null,
-    };
+  // Reset game / Request rematch
+  const resetGame = async () => {
+    if (gameMode === 'multi-online' && roomId) {
+      // Request rematch
+      const newRematchRequests = { ...rematchRequests, [myPlayer]: true };
+      
+      try {
+        const res = await fetch(`/api/game/${roomId}`);
+        const data = await res.json();
+        
+        // Check if opponent already requested
+        const opponentPlayer = myPlayer === 'X' ? 'O' : 'X';
+        const opponentRequested = data.rematchRequests?.[opponentPlayer] || false;
+        
+        if (opponentRequested) {
+          // Both players agreed, reset the game
+          const initialState = {
+            boards: Array(9).fill(null).map(() => Array(9).fill(null)),
+            boardWinners: Array(9).fill(null),
+            currentPlayer: 'X' as Player,
+            activeBoard: null,
+            gameWinner: null,
+            players: { X: 'connected', O: 'connected' },
+            rematchRequests: { X: false, O: false }
+          };
+          
+          await syncState(initialState);
+          
+          // Update local state
+          setBoards(initialState.boards);
+          setBoardWinners(initialState.boardWinners);
+          setCurrentPlayer('X');
+          setActiveBoard(null);
+          setGameWinner(null);
+          setRematchRequests({ X: false, O: false });
+          setShowRematchNotification(false);
+        } else {
+          // Just send my rematch request
+          await syncState({
+            ...data,
+            rematchRequests: newRematchRequests
+          });
+          setRematchRequests(newRematchRequests);
+        }
+      } catch (e) {
+        console.error('Rematch error:', e);
+      }
+    } else {
+      // Local/Solo mode - reset immediately
+      const initialState = {
+        boards: Array(9).fill(null).map(() => Array(9).fill(null)),
+        boardWinners: Array(9).fill(null),
+        currentPlayer: 'X' as Player,
+        activeBoard: null,
+        gameWinner: null,
+      };
 
-    setBoards(initialState.boards);
-    setBoardWinners(initialState.boardWinners);
-    setCurrentPlayer('X');
-    setActiveBoard(null);
-    setGameWinner(null);
-    setScale(1);
-    setPosition({ x: 0, y: 0 });
+      setBoards(initialState.boards);
+      setBoardWinners(initialState.boardWinners);
+      setCurrentPlayer('X');
+      setActiveBoard(null);
+      setGameWinner(null);
+      setScale(1);
+      setPosition({ x: 0, y: 0 });
+    }
+  };
 
-    if (gameMode === 'multi-online') {
-      syncState({
-        ...initialState,
-        players: { X: 'connected', O: 'connected' }
-      });
+  // Reject rematch
+  const rejectRematch = async () => {
+    if (gameMode === 'multi-online' && roomId) {
+      try {
+        const res = await fetch(`/api/game/${roomId}`);
+        const data = await res.json();
+        
+        // Clear all rematch requests
+        await syncState({
+          ...data,
+          rematchRequests: { X: false, O: false }
+        });
+        
+        setRematchRequests({ X: false, O: false });
+        setShowRematchNotification(false);
+      } catch (e) {
+        console.error('Reject rematch error:', e);
+      }
     }
   };
 
@@ -428,13 +508,56 @@ const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackT
               </p>
             </div>
           </div>
-          <button
-            onClick={resetGame}
-            className="px-2 py-1 sm:px-4 sm:py-2 bg-white text-purple-900 rounded-lg text-sm sm:text-base font-semibold hover:bg-purple-100 transition flex-shrink-0"
-          >
-            <span className="hidden sm:inline">New Game</span>
-            <span className="sm:hidden">New</span>
-          </button>
+          
+          {/* Rematch Buttons */}
+          {gameMode === 'multi-online' && showRematchNotification && !rematchRequests[myPlayer] ? (
+            // Show Accept/Reject when opponent requested
+            <div className="flex gap-2 flex-shrink-0">
+              <button
+                onClick={resetGame}
+                className="px-2 py-1 sm:px-4 sm:py-2 bg-green-500 text-white rounded-lg text-sm sm:text-base font-semibold hover:bg-green-600 transition"
+              >
+                <span className="hidden sm:inline">✓ Accept</span>
+                <span className="sm:hidden">✓</span>
+              </button>
+              <button
+                onClick={rejectRematch}
+                className="px-2 py-1 sm:px-4 sm:py-2 bg-red-500 text-white rounded-lg text-sm sm:text-base font-semibold hover:bg-red-600 transition"
+              >
+                <span className="hidden sm:inline">✗ Reject</span>
+                <span className="sm:hidden">✗</span>
+              </button>
+            </div>
+          ) : (
+            // Normal button
+            <button
+              onClick={resetGame}
+              className={`px-2 py-1 sm:px-4 sm:py-2 rounded-lg text-sm sm:text-base font-semibold transition flex-shrink-0 ${
+                gameMode === 'multi-online' && rematchRequests[myPlayer]
+                  ? 'bg-yellow-400 text-purple-900 hover:bg-yellow-300'
+                  : 'bg-white text-purple-900 hover:bg-purple-100'
+              }`}
+            >
+              {gameMode === 'multi-online' ? (
+                rematchRequests[myPlayer] ? (
+                  <>
+                    <span className="hidden sm:inline">⏳ Waiting...</span>
+                    <span className="sm:hidden">⏳</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="hidden sm:inline">Request Rematch</span>
+                    <span className="sm:hidden">Rematch</span>
+                  </>
+                )
+              ) : (
+                <>
+                  <span className="hidden sm:inline">New Game</span>
+                  <span className="sm:hidden">New</span>
+                </>
+              )}
+            </button>
+          )}
         </div>
       </div>
 
@@ -467,6 +590,19 @@ const UltimateTicTacToe: React.FC<UltimateTicTacToeProps> = ({ gameMode, onBackT
           </div>
         </div>
       </div>
+
+      {/* Rematch Notification */}
+      {gameMode === 'multi-online' && showRematchNotification && !rematchRequests[myPlayer] && (
+        <div className="absolute top-32 sm:top-40 left-0 right-0 z-20 pointer-events-none">
+          <div className="max-w-7xl mx-auto px-2 sm:px-4">
+            <div className="bg-blue-500/90 backdrop-blur-md rounded-lg p-3 sm:p-4 inline-block pointer-events-auto animate-pulse">
+              <div className="text-sm sm:text-base font-semibold text-white">
+                🔄 Opponent wants a rematch! Click "Request Rematch" to accept.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Zoom Controls */}
       {/* Zoom Controls - Collapsible FAB */}

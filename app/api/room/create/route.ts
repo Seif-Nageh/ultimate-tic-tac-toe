@@ -16,6 +16,10 @@ export async function POST(request: Request) {
             players: {
                 X: 'connected',
                 O: 'waiting'
+            },
+            rematchRequests: {
+                X: false,
+                O: false
             }
         };
 
